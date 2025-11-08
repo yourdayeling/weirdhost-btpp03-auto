@@ -9,12 +9,13 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
     此函数设计为每次GitHub Actions运行时执行一次。
     """
     # 从环境变量获取登录凭据
-    remember_web_cookie = os.environ.get('REMEMBER_WEB_COOKIE')
+    # 注意：REMEMBER_WEB_COOKIE 环境变量应包含完整的 Cookie 字符串，例如: "cookie1=value1; cookie2=value2"
+    remember_web_cookie_string = os.environ.get('REMEMBER_WEB_COOKIE')
     pterodactyl_email = os.environ.get('PTERODACTYL_EMAIL')
     pterodactyl_password = os.environ.get('PTERODACTYL_PASSWORD')
 
     # 检查是否提供了任何登录凭据
-    if not (remember_web_cookie or (pterodactyl_email and pterodactyl_password)):
+    if not (remember_web_cookie_string or (pterodactyl_email and pterodactyl_password)):
         print("错误: 缺少登录凭据。请设置 REMEMBER_WEB_COOKIE 或 PTERODACTYL_EMAIL 和 PTERODACTYL_PASSWORD 环境变量。")
         return False
 
@@ -24,52 +25,68 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
         page = browser.new_page()
         # 增加默认超时时间到90秒，以应对网络波动和慢加载
         page.set_default_timeout(90000)
+        
+        # 定义通用域名和路径
+        DEFAULT_DOMAIN = 'hub.weirdhost.xyz'
+        DEFAULT_PATH = '/'
 
         try:
-            # --- 方案一：优先尝试使用 Cookie 会话登录 ---
-            if remember_web_cookie:
-                print("检测到 REMEMBER_WEB_COOKIE，尝试使用 Cookie 登录...")
-                session_cookie = {
-                    'name': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d',
-                    'value': remember_web_cookie,
-                    'domain': 'hub.weirdhost.xyz',  # 已更新为新的域名
-                    'path': '/',
-                    'expires': int(time.time()) + 3600 * 24 * 365, # 设置一个较长的过期时间
-                    'httpOnly': True,
-                    'secure': True,
-                    'sameSite': 'Lax'
-                }
-                page.context.add_cookies([session_cookie])
-                print(f"已设置 Cookie。正在访问目标服务器页面: {server_url}")
+            # --- 方案一：优先尝试使用 Cookie 会话登录 (已修正解析逻辑) ---
+            if remember_web_cookie_string:
+                print("检测到 REMEMBER_WEB_COOKIE 字符串，尝试解析并设置 Cookie...")
                 
-                try:
-                    # 使用 'domcontentloaded' 以加快页面加载判断，然后依赖选择器等待确保元素加载
-                    page.goto(server_url, wait_until="domcontentloaded", timeout=90000)
-                except PlaywrightTimeoutError:
-                    print(f"页面加载超时（90秒）。")
-                    page.screenshot(path="goto_timeout_error.png")
+                cookies_to_add = []
                 
-                # 检查是否因 Cookie 无效被重定向到登录页
-                if "login" in page.url or "auth" in page.url:
-                    print("Cookie 登录失败或会话已过期，将回退到邮箱密码登录。")
-                    page.context.clear_cookies()
-                    remember_web_cookie = None # 标记 Cookie 登录失败，以便执行下一步
-                else:
-                    print("Cookie 登录成功，已进入服务器页面。")
+                # 拆分并格式化 Cookie 字符串，兼容多个 Cookie
+                for cookie_pair in remember_web_cookie_string.split('; '):
+                    if '=' in cookie_pair:
+                        name, value = cookie_pair.split('=', 1)
+                        if name and value:
+                            cookies_to_add.append({
+                                'name': name.strip(),
+                                'value': value.strip(),
+                                'domain': DEFAULT_DOMAIN,
+                                'path': DEFAULT_PATH,
+                                'expires': int(time.time()) + 3600 * 24 * 365,
+                                'secure': True,
+                                'sameSite': 'Lax'
+                            })
 
+                if cookies_to_add:
+                    print(f"已解析出 {len(cookies_to_add)} 个 Cookie。正在设置...")
+                    page.context.add_cookies(cookies_to_add)
+                    print(f"已设置 Cookie。正在访问目标服务器页面: {server_url}")
+
+                    try:
+                        page.goto(server_url, wait_until="domcontentloaded", timeout=90000)
+                    except PlaywrightTimeoutError:
+                        print(f"页面加载超时（90秒）。")
+                        page.screenshot(path="goto_timeout_error.png")
+                    
+                    # 检查是否因 Cookie 无效被重定向到登录页
+                    if "login" in page.url or "auth" in page.url:
+                        print("Cookie 登录失败或会话已过期，将回退到邮箱密码登录。")
+                        page.context.clear_cookies()
+                        remember_web_cookie_string = None # 标记 Cookie 登录失败
+                    else:
+                        print("Cookie 登录成功，已进入服务器页面。")
+                else:
+                    print("错误: REMEMBER_WEB_COOKIE 环境变量解析失败或为空。将回退到邮箱密码登录。")
+                    remember_web_cookie_string = None
+            
             # --- 方案二：如果 Cookie 方案失败或未提供，则使用邮箱密码登录 ---
-            if not remember_web_cookie:
+            if not remember_web_cookie_string:
                 if not (pterodactyl_email and pterodactyl_password):
                     print("错误: Cookie 无效，且未提供 PTERODACTYL_EMAIL 或 PTERODACTYL_PASSWORD。无法登录。")
                     browser.close()
                     return False
 
-                login_url = "https://hub.weirdhost.xyz/auth/login" # 已更新为新的登录URL
+                login_url = f"https://{DEFAULT_DOMAIN}/auth/login"
                 print(f"正在访问登录页面: {login_url}")
                 page.goto(login_url, wait_until="domcontentloaded", timeout=90000)
 
-                # 定义选择器 (Pterodactyl 面板通用，无需修改)
-                email_selector = 'input[name="username"]' 
+                # 定义选择器 (Pterodactyl 面板通用)
+                email_selector = 'input[name="username"]'  
                 password_selector = 'input[name="password"]'
                 login_button_selector = 'button[type="submit"]'
 
@@ -107,7 +124,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
                     return False
 
             # --- 核心操作：查找并点击 "시간 추가" 按钮 ---
-            add_button_selector = 'button:has-text("시간 추가")' # 已更新为新的按钮文本
+            add_button_selector = 'button:has-text("시간 추가")'
             print(f"正在查找并等待 '{add_button_selector}' 按钮...")
 
             try:
