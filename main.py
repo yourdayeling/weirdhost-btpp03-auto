@@ -6,10 +6,8 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
     """
     尝试登录 hub.weirdhost.xyz 并点击 "시간추가" 按钮。
     优先使用 REMEMBER_WEB_COOKIE 进行会话登录，如果不存在则回退到邮箱密码登录。
-    此函数设计为每次GitHub Actions运行时执行一次。
     """
     # 从环境变量获取登录凭据
-    # REMEMBER_WEB_COOKIE 环境变量应包含完整的 Cookie 字符串，例如: "cookie1=value1; cookie2=value2"
     remember_web_cookie_string = os.environ.get('REMEMBER_WEB_COOKIE')
     pterodactyl_email = os.environ.get('PTERODACTYL_EMAIL')
     pterodactyl_password = os.environ.get('PTERODACTYL_PASSWORD')
@@ -19,24 +17,21 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
         print("错误: 缺少登录凭据。请设置 REMEMBER_WEB_COOKIE 或 PTERODACTYL_EMAIL 和 PTERODACTYL_PASSWORD 环境变量。")
         return False
 
+    # 定义通用域名和路径
+    DEFAULT_DOMAIN = 'hub.weirdhost.xyz'
+    DEFAULT_PATH = '/'
+
     with sync_playwright() as p:
-        # 在 GitHub Actions 中，使用 headless 无头模式运行
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        # 增加默认超时时间到90秒，以应对网络波动和慢加载
         page.set_default_timeout(90000)
-        
-        # 定义通用域名和路径
-        DEFAULT_DOMAIN = 'hub.weirdhost.xyz'
-        DEFAULT_PATH = '/'
 
         try:
-            # --- 方案一：优先尝试使用 Cookie 会话登录 (已修正解析逻辑) ---
+            # --- 方案一：优先尝试使用 Cookie 会话登录 (Cookie 解析逻辑已修正) ---
             if remember_web_cookie_string:
                 print("检测到 REMEMBER_WEB_COOKIE 字符串，尝试解析并设置 Cookie...")
                 
                 cookies_to_add = []
-                
                 # 拆分并格式化 Cookie 字符串，兼容多个 Cookie
                 for cookie_pair in remember_web_cookie_string.split('; '):
                     if '=' in cookie_pair:
@@ -54,7 +49,6 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
 
                 if cookies_to_add:
                     print(f"已解析出 {len(cookies_to_add)} 个 Cookie。正在设置...")
-                    # 批量添加所有解析出的 Cookie
                     page.context.add_cookies(cookies_to_add)
                     print(f"已设置 Cookie。正在访问目标服务器页面: {server_url}")
 
@@ -64,11 +58,10 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
                         print(f"页面加载超时（90秒）。")
                         page.screenshot(path="goto_timeout_error.png")
                     
-                    # 检查是否因 Cookie 无效被重定向到登录页
                     if "login" in page.url or "auth" in page.url:
                         print("Cookie 登录失败或会话已过期，将回退到邮箱密码登录。")
                         page.context.clear_cookies()
-                        remember_web_cookie_string = None # 标记 Cookie 登录失败
+                        remember_web_cookie_string = None
                     else:
                         print("Cookie 登录成功，已进入服务器页面。")
                 else:
@@ -86,17 +79,13 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
                 print(f"正在访问登录页面: {login_url}")
                 page.goto(login_url, wait_until="domcontentloaded", timeout=90000)
 
-                # 定义选择器 (Pterodactyl 面板通用)
+                # 登录逻辑 (保持不变)
                 email_selector = 'input[name="username"]'  
                 password_selector = 'input[name="password"]'
                 login_button_selector = 'button[type="submit"]'
 
                 print("等待登录表单元素加载...")
-                page.wait_for_selector(email_selector)
-                page.wait_for_selector(password_selector)
                 page.wait_for_selector(login_button_selector)
-
-                print("正在填写邮箱和密码...")
                 page.fill(email_selector, pterodactyl_email)
                 page.fill(password_selector, pterodactyl_password)
 
@@ -104,7 +93,6 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
                 with page.expect_navigation(wait_until="domcontentloaded", timeout=60000):
                     page.click(login_button_selector)
 
-                # 检查登录后是否成功
                 if "login" in page.url or "auth" in page.url:
                     error_text = page.locator('.alert.alert-danger').inner_text().strip() if page.locator('.alert.alert-danger').count() > 0 else "未知错误，URL仍在登录页。"
                     print(f"邮箱密码登录失败: {error_text}")
@@ -124,36 +112,49 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
                     browser.close()
                     return False
 
-            # --- 核心操作：查找并点击 "시간추가" 按钮 (已修正) ---
-            add_button_selector = 'button:has-text("시간추가")' # 修正：移除空格
-            print(f"正在查找并等待 '{add_button_selector}' 按钮...")
+            # --- 核心操作：查找并点击 "시간추가" 按钮 (最终修正) ---
+            
+            # 1. 尝试滚动到底部以确保所有元素加载
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(1) 
+            
+            # 2. 使用 Playwright 推荐的 get_by_role 结合 name (文本) 定位，更稳定
+            # name 参数使用 exact=True 确保精确匹配 "시간추가" 
+            print("尝试使用 get_by_role 查找 '시간추가' 按钮...")
+            add_button = page.get_by_role("button", name="시간추가", exact=True)
 
             try:
-                # 步骤 1: 尝试滚动到底部以确保所有元素加载
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(1) 
-                
                 # 等待按钮变为可见且可点击
-                add_button = page.locator(add_button_selector)
                 add_button.wait_for(state='visible', timeout=30000)
                 
                 # 尝试强制点击，避免被其他元素遮挡
                 add_button.click(force=True)
                 
                 print("成功点击 '시간추가' 按钮。")
-                time.sleep(5) # 等待5秒，确保操作在服务器端生效
+                time.sleep(5) 
                 print("任务完成。")
                 browser.close()
                 return True
             except PlaywrightTimeoutError:
-                print(f"错误: 在30秒内未找到或 '시간추가' 按钮不可见/不可点击。")
-                page.screenshot(path="add_time_button_not_found.png")
-                browser.close()
-                return False
+                # 如果 get_by_role 失败，回退到原始的 CSS has-text 选择器进行二次尝试 (尽管它不太可能是问题所在)
+                print("get_by_role 失败。尝试使用 'button:has-text(\"시간추가\")' 重新定位...")
+                add_button_selector = 'button:has-text("시간추가")'
+                try:
+                    add_button_fallback = page.locator(add_button_selector)
+                    add_button_fallback.wait_for(state='visible', timeout=15000)
+                    add_button_fallback.click(force=True)
+                    print("成功点击 '시간추가' 按钮 (回退定位成功)。")
+                    time.sleep(5) 
+                    browser.close()
+                    return True
+                except PlaywrightTimeoutError:
+                    print(f"错误: 在30秒内未找到 '시간추가' 按钮。")
+                    page.screenshot(path="add_time_button_not_found.png")
+                    browser.close()
+                    return False
 
         except Exception as e:
             print(f"执行过程中发生未知错误: {e}")
-            # 发生任何异常时都截图，以便调试
             page.screenshot(path="general_error.png")
             browser.close()
             return False
