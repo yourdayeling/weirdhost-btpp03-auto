@@ -4,12 +4,12 @@ from playwright.sync_api import sync_playwright, Cookie, TimeoutError as Playwri
 
 def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
     """
-    尝试登录 hub.weirdhost.xyz 并点击 "시간 추가" 按钮。
+    尝试登录 hub.weirdhost.xyz 并点击 "시간추가" 按钮。
     优先使用 REMEMBER_WEB_COOKIE 进行会话登录，如果不存在则回退到邮箱密码登录。
     此函数设计为每次GitHub Actions运行时执行一次。
     """
     # 从环境变量获取登录凭据
-    # 注意：REMEMBER_WEB_COOKIE 环境变量应包含完整的 Cookie 字符串，例如: "cookie1=value1; cookie2=value2"
+    # REMEMBER_WEB_COOKIE 环境变量应包含完整的 Cookie 字符串，例如: "cookie1=value1; cookie2=value2"
     remember_web_cookie_string = os.environ.get('REMEMBER_WEB_COOKIE')
     pterodactyl_email = os.environ.get('PTERODACTYL_EMAIL')
     pterodactyl_password = os.environ.get('PTERODACTYL_PASSWORD')
@@ -54,6 +54,7 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
 
                 if cookies_to_add:
                     print(f"已解析出 {len(cookies_to_add)} 个 Cookie。正在设置...")
+                    # 批量添加所有解析出的 Cookie
                     page.context.add_cookies(cookies_to_add)
                     print(f"已设置 Cookie。正在访问目标服务器页面: {server_url}")
 
@@ -123,23 +124,30 @@ def add_server_time(server_url="https://hub.weirdhost.xyz/server/940cf846"):
                     browser.close()
                     return False
 
-            # --- 核心操作：查找并点击 "시간 추가" 按钮 ---
-            add_button_selector = 'button:has-text("시간 추가")'
+            # --- 核心操作：查找并点击 "시간추가" 按钮 (已修正) ---
+            add_button_selector = 'button:has-text("시간추가")' # 修正：移除空格
             print(f"正在查找并等待 '{add_button_selector}' 按钮...")
 
             try:
+                # 步骤 1: 尝试滚动到底部以确保所有元素加载
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(1) 
+                
                 # 等待按钮变为可见且可点击
                 add_button = page.locator(add_button_selector)
                 add_button.wait_for(state='visible', timeout=30000)
-                add_button.click()
-                print("成功点击 '시간 추가' 按钮。")
+                
+                # 尝试强制点击，避免被其他元素遮挡
+                add_button.click(force=True)
+                
+                print("成功点击 '시간추가' 按钮。")
                 time.sleep(5) # 等待5秒，确保操作在服务器端生效
                 print("任务完成。")
                 browser.close()
                 return True
             except PlaywrightTimeoutError:
-                print(f"错误: 在30秒内未找到或 '시간 추가' 按钮不可见/不可点击。")
-                page.screenshot(path="add_6h_button_not_found.png")
+                print(f"错误: 在30秒内未找到或 '시간추가' 按钮不可见/不可点击。")
+                page.screenshot(path="add_time_button_not_found.png")
                 browser.close()
                 return False
 
